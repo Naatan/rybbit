@@ -2,7 +2,6 @@ services:
   caddy:
     profiles: ["with-webserver"]
     image: caddy:2.10.0
-    container_name: caddy
     restart: unless-stopped
     ports:
       - "80:80"
@@ -21,7 +20,6 @@ services:
       - client
 
   clickhouse:
-    container_name: clickhouse
     image: clickhouse/clickhouse-server:25.4.2
     volumes:
       - clickhouse-data:/var/lib/clickhouse
@@ -50,7 +48,6 @@ services:
 
   postgres:
     image: postgres:17.4
-    container_name: postgres
     environment:
       - POSTGRES_USER=${POSTGRES_USER:-frog}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-frog}
@@ -69,7 +66,6 @@ services:
 
   backend:
     image: ghcr.io/rybbit-io/rybbit-backend:${IMAGE_TAG:-latest}
-    container_name: backend
     build:
       context: .
       dockerfile: server/Dockerfile
@@ -105,7 +101,6 @@ services:
 
   client:
     image: ghcr.io/rybbit-io/rybbit-client:${IMAGE_TAG:-latest}
-    container_name: client
     build:
       context: .
       dockerfile: client/Dockerfile
