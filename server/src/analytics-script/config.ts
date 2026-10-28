@@ -1,5 +1,106 @@
 import { ScriptConfig } from "./types.js";
 import { parseJsonSafely } from "./utils.js";
+import { getTrackedPathname } from "./url.js";
+
+const FEATURE_FLAG_REQUEST_TIMEOUT_MS = 2000;
+
+type FeatureFlagFetchResult = {
+  enabled: boolean;
+  flags: ScriptConfig["featureFlags"];
+};
+
+function createVisitorId(): string {
+  try {
+    if (crypto?.randomUUID) {
+      return crypto.randomUUID();
+    }
+  } catch (e) {
+    // crypto may be unavailable in older browsers
+  }
+
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
+}
+
+function getOrCreateVisitorId(namespace: string): string {
+  const key = `${namespace}-visitor-id`;
+
+  try {
+    const stored = localStorage.getItem(key);
+    if (stored) return stored;
+
+    const visitorId = createVisitorId();
+    localStorage.setItem(key, visitorId);
+    return visitorId;
+  } catch (e) {
+    return createVisitorId();
+  }
+}
+
+function getIdentifiedUserId(namespace: string): string | undefined {
+  try {
+    return localStorage.getItem(`${namespace}-user-id`) || undefined;
+  } catch (e) {
+    return undefined;
+  }
+}
+
+async function fetchFeatureFlags(
+  analyticsHost: string,
+  siteId: string,
+  namespace: string,
+  visitorId: string,
+  trackUrlFragments: boolean
+): Promise<FeatureFlagFetchResult> {
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), FEATURE_FLAG_REQUEST_TIMEOUT_MS);
+
+  try {
+    const url = new URL(window.location.href);
+    const response = await fetch(`${analyticsHost}/site/${siteId}/feature-flags/evaluate`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      credentials: "omit",
+      signal: controller.signal,
+      body: JSON.stringify({
+        anonymousId: visitorId,
+        identifiedUserId: getIdentifiedUserId(namespace),
+        hostname: url.hostname,
+        pathname: getTrackedPathname(url, trackUrlFragments),
+        querystring: url.search,
+        query: Object.fromEntries(url.searchParams.entries()),
+        referrer: document.referrer,
+        language: navigator.language,
+        screenWidth: screen.width,
+        screenHeight: screen.height,
+      }),
+    });
+
+    if (!response.ok) {
+      return { enabled: true, flags: {} };
+    }
+
+    const data = await response.json();
+    return {
+      enabled: data?.featureFlagsEnabled !== false,
+      flags: data?.flags && typeof data.flags === "object" ? data.flags : {},
+    };
+  } catch (e) {
+    return { enabled: true, flags: {} };
+  } finally {
+    window.clearTimeout(timeout);
+  }
+}
+
+function getSiteIdFromSrc(src: string): string | null {
+  try {
+    const url = new URL(src, window.location.href);
+    return url.searchParams.get("siteId") || url.searchParams.get("site-id") || url.searchParams.get("site_id");
+  } catch (e) {
+    return null;
+  }
+}
 
 /**
  * Parse minimal script configuration from the script tag attributes
@@ -18,13 +119,20 @@ export async function parseScriptConfig(scriptTag: HTMLScriptElement): Promise<S
     return null;
   }
 
-  const siteId = scriptTag.getAttribute("data-site-id") || scriptTag.getAttribute("site-id");
+  // Prefer the site ID from the script URL (`/script.js?siteId=...`). Script
+  // optimizers such as WP Rocket, Perfmatters, and FlyingPress recreate the
+  // tag from `data-src` and drop every other `data-*` attribute, but they keep
+  // the URL intact. The attributes remain supported for existing installs.
+  const siteId = getSiteIdFromSrc(src) || scriptTag.getAttribute("data-site-id") || scriptTag.getAttribute("site-id");
   if (!siteId) {
-    console.error("Please provide a valid site ID using the data-site-id attribute");
+    console.error("Please provide a valid site ID using the ?siteId= query parameter or the data-site-id attribute");
     return null;
   }
 
   const namespace = scriptTag.getAttribute("data-namespace") || "rybbit";
+  // In-memory until the site is known to use feature flags, so plain analytics
+  // installs never touch localStorage (which would require consent in the EU).
+  const visitorId = createVisitorId();
 
   // These can be overridden via data attributes for testing/debugging
   const skipPatterns = parseJsonSafely<string[]>(scriptTag.getAttribute("data-skip-patterns"), []);
@@ -54,9 +162,7 @@ export async function parseScriptConfig(scriptTag: HTMLScriptElement): Promise<S
   const sessionReplayMaskTextClass = scriptTag.getAttribute("data-replay-mask-text-class") || undefined;
 
   const maskAllInputsAttr = scriptTag.getAttribute("data-replay-mask-all-inputs");
-  const sessionReplayMaskAllInputs = maskAllInputsAttr !== null
-    ? maskAllInputsAttr !== "false"
-    : undefined;
+  const sessionReplayMaskAllInputs = maskAllInputsAttr !== null ? maskAllInputsAttr !== "false" : undefined;
 
   const maskInputOptionsAttr = scriptTag.getAttribute("data-replay-mask-input-options");
   const sessionReplayMaskInputOptions = maskInputOptionsAttr
@@ -64,14 +170,10 @@ export async function parseScriptConfig(scriptTag: HTMLScriptElement): Promise<S
     : undefined;
 
   const collectFontsAttr = scriptTag.getAttribute("data-replay-collect-fonts");
-  const sessionReplayCollectFonts = collectFontsAttr !== null
-    ? collectFontsAttr !== "false"
-    : undefined;
+  const sessionReplayCollectFonts = collectFontsAttr !== null ? collectFontsAttr !== "false" : undefined;
 
   const samplingAttr = scriptTag.getAttribute("data-replay-sampling");
-  const sessionReplaySampling = samplingAttr
-    ? parseJsonSafely<Record<string, any>>(samplingAttr, {})
-    : undefined;
+  const sessionReplaySampling = samplingAttr ? parseJsonSafely<Record<string, any>>(samplingAttr, {}) : undefined;
 
   const slimDOMAttr = scriptTag.getAttribute("data-replay-slim-dom-options");
   const sessionReplaySlimDOMOptions = slimDOMAttr
@@ -79,15 +181,16 @@ export async function parseScriptConfig(scriptTag: HTMLScriptElement): Promise<S
     : undefined;
 
   const sampleRateAttr = scriptTag.getAttribute("data-replay-sample-rate");
-  const sessionReplaySampleRate = sampleRateAttr
-    ? Math.min(100, Math.max(0, parseInt(sampleRateAttr, 10)))
-    : undefined;
+  const sessionReplaySampleRate = sampleRateAttr ? Math.min(100, Math.max(0, parseInt(sampleRateAttr, 10))) : undefined;
+
+  const tag = scriptTag.getAttribute("data-tag") || "";
 
   // Default config with minimal settings
   const defaultConfig: ScriptConfig = {
     namespace,
     analyticsHost,
     siteId,
+    visitorId,
     debounceDuration,
     sessionReplayBatchSize,
     sessionReplayBatchInterval,
@@ -98,6 +201,7 @@ export async function parseScriptConfig(scriptTag: HTMLScriptElement): Promise<S
     autoTrackPageview: true,
     autoTrackSpa: true,
     trackQuerystring: true,
+    trackUrlFragments: false,
     trackOutbound: true,
     enableWebVitals: false,
     trackErrors: false,
@@ -105,6 +209,9 @@ export async function parseScriptConfig(scriptTag: HTMLScriptElement): Promise<S
     trackButtonClicks: false,
     trackCopy: false,
     trackFormInteractions: false,
+    tag,
+    featureFlagsEnabled: false,
+    featureFlags: {},
     // rrweb session replay options (undefined means use rrweb defaults)
     sessionReplayBlockClass,
     sessionReplayBlockSelector,
@@ -119,6 +226,8 @@ export async function parseScriptConfig(scriptTag: HTMLScriptElement): Promise<S
     sessionReplaySampleRate,
   };
 
+  let resolvedConfig = defaultConfig;
+
   try {
     // Fetch configuration from API
     const configUrl = `${analyticsHost}/site/tracking-config/${siteId}`;
@@ -132,12 +241,13 @@ export async function parseScriptConfig(scriptTag: HTMLScriptElement): Promise<S
       const apiConfig = await response.json();
 
       // Merge API config with defaults, API config takes precedence
-      return {
+      resolvedConfig = {
         ...defaultConfig,
         // Map API field names to script config field names
         autoTrackPageview: apiConfig.trackInitialPageView ?? defaultConfig.autoTrackPageview,
         autoTrackSpa: apiConfig.trackSpaNavigation ?? defaultConfig.autoTrackSpa,
         trackQuerystring: apiConfig.trackUrlParams ?? defaultConfig.trackQuerystring,
+        trackUrlFragments: apiConfig.trackUrlFragments ?? defaultConfig.trackUrlFragments,
         trackOutbound: apiConfig.trackOutbound ?? defaultConfig.trackOutbound,
         enableWebVitals: apiConfig.webVitals ?? defaultConfig.enableWebVitals,
         trackErrors: apiConfig.trackErrors ?? defaultConfig.trackErrors,
@@ -145,15 +255,29 @@ export async function parseScriptConfig(scriptTag: HTMLScriptElement): Promise<S
         trackButtonClicks: apiConfig.trackButtonClicks ?? defaultConfig.trackButtonClicks,
         trackCopy: apiConfig.trackCopy ?? defaultConfig.trackCopy,
         trackFormInteractions: apiConfig.trackFormInteractions ?? defaultConfig.trackFormInteractions,
+        featureFlagsEnabled: apiConfig.featureFlagsEnabled === true,
       };
     } else {
       // If API call fails, log warning and use defaults
       console.warn("Failed to fetch tracking config from API, using defaults");
-      return defaultConfig;
     }
   } catch (error) {
     // If network error, log and use defaults
     console.warn("Error fetching tracking config:", error);
-    return defaultConfig;
   }
+
+  if (resolvedConfig.featureFlagsEnabled) {
+    // Percentage rollouts bucket on this ID, so persist it across page loads.
+    resolvedConfig.visitorId = getOrCreateVisitorId(namespace);
+    const result = await fetchFeatureFlags(
+      analyticsHost,
+      siteId,
+      namespace,
+      resolvedConfig.visitorId,
+      resolvedConfig.trackUrlFragments
+    );
+    resolvedConfig.featureFlagsEnabled = result.enabled;
+    resolvedConfig.featureFlags = result.flags;
+  }
+  return resolvedConfig;
 }

@@ -15,8 +15,22 @@ declare global {
   }
 }
 
+function hasOptedOut(optOutKey: string): boolean {
+  if (window.__RYBBIT_OPTOUT__) return true;
+  try {
+    return localStorage.getItem(optOutKey) !== null;
+  } catch {
+    // Storage is blocked (cookies disabled, sandboxed iframe): not opted out.
+    return false;
+  }
+}
+
 (async function () {
-  const scriptTag = document.currentScript as HTMLScriptElement;
+  // Script optimizers that re-inject the tag can leave `document.currentScript`
+  // null; fall back to locating our own tag by its URL.
+  const scriptTag =
+    (document.currentScript as HTMLScriptElement | null) ||
+    document.querySelector<HTMLScriptElement>('script[src*="/script.js"]');
   if (!scriptTag) {
     console.error("Could not find current script tag");
     return;
@@ -27,7 +41,7 @@ declare global {
   const optOutKey = `disable-${namespace}`;
 
   // Check if user has opted out
-  if (window.__RYBBIT_OPTOUT__ || localStorage.getItem(optOutKey) !== null) {
+  if (hasOptedOut(optOutKey)) {
     // Create no-op implementation
     window[namespace] = {
       pageview: () => {},
@@ -38,12 +52,45 @@ declare global {
       setTraits: () => {},
       clearUserId: () => {},
       getUserId: () => null,
+      flag: (_key: string, fallback?: unknown) => fallback,
+      flagPayload: (_key: string, fallback?: unknown) => fallback,
+      flags: () => ({}),
+      flagPayloads: () => ({}),
+      onReady: () => {},
       startSessionReplay: () => {},
       stopSessionReplay: () => {},
       isSessionReplayActive: () => false,
     };
     return;
   }
+
+  // Expose stub API immediately to queue calls made before config is ready
+  type QueueEntry = [string, any[]];
+  const earlyQueue: QueueEntry[] = [];
+  const queueMethod =
+    (method: string) =>
+    (...args: any[]) => {
+      earlyQueue.push([method, args]);
+    };
+
+  window[namespace] = {
+    pageview: queueMethod("pageview"),
+    event: queueMethod("event"),
+    error: queueMethod("error"),
+    trackOutbound: queueMethod("trackOutbound"),
+    identify: queueMethod("identify"),
+    setTraits: queueMethod("setTraits"),
+    clearUserId: queueMethod("clearUserId"),
+    getUserId: () => null,
+    flag: (_key: string, fallback?: unknown) => fallback,
+    flagPayload: (_key: string, fallback?: unknown) => fallback,
+    flags: () => ({}),
+    flagPayloads: () => ({}),
+    onReady: queueMethod("onReady"),
+    startSessionReplay: queueMethod("startSessionReplay"),
+    stopSessionReplay: queueMethod("stopSessionReplay"),
+    isSessionReplayActive: () => false,
+  };
 
   // Parse configuration (now async to fetch from API)
   const config = await parseScriptConfig(scriptTag);
@@ -106,7 +153,7 @@ declare global {
   }
 
   // Create debounced pageview tracker
-  const trackPageview = () => tracker.trackPageview();
+  const trackPageview = () => tracker.trackPageviewIfUrlChanged();
   const debouncedTrackPageview =
     config!.debounceDuration > 0 ? debounce(trackPageview, config!.debounceDuration) : trackPageview;
 
@@ -183,19 +230,31 @@ declare global {
     setTraits: (traits: Record<string, unknown>) => tracker.setTraits(traits),
     clearUserId: () => tracker.clearUserId(),
     getUserId: () => tracker.getUserId(),
+    flag: <T = unknown>(key: string, fallback?: T) => tracker.getFeatureFlag<T>(key, fallback),
+    flagPayload: <T = unknown>(key: string, fallback?: T) => tracker.getFeatureFlagPayload<T>(key, fallback),
+    flags: () => tracker.getFeatureFlags(),
+    flagPayloads: () => tracker.getFeatureFlagPayloads(),
+    onReady: (callback: (api: RybbitAPI) => void) => callback(window[config.namespace]),
     startSessionReplay: () => tracker.startSessionReplay(),
     stopSessionReplay: () => tracker.stopSessionReplay(),
     isSessionReplayActive: () => tracker.isSessionReplayActive(),
   };
 
+  // Replay any calls made during initialization
+  const api = window[config.namespace];
+  for (const [method, args] of earlyQueue) {
+    (api[method] as Function)(...args);
+  }
+
   // Initialize
   setupEventListeners();
 
-  // Setup cleanup on page unload
+  // Setup cleanup on page unload. Session replay is left running: it flushes
+  // itself on page hide, and beforeunload also fires for pages that stay (a
+  // cancelled leave prompt, a download link) or come back from the bfcache.
   window.addEventListener("beforeunload", () => {
     clickManager?.cleanup();
     copyManager?.cleanup();
-    tracker.cleanup();
   });
 
   // Track initial pageview if enabled

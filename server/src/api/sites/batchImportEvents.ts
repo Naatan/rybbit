@@ -2,14 +2,16 @@ import { FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 import { clickhouse } from "../../db/clickhouse/clickhouse.js";
 import { updateImportProgress, completeImport, getImportById } from "../../services/import/importStatusManager.js";
-import { UmamiEvent, UmamiImportMapper } from "../../services/import/mappings/umami.js";
-import { SimpleAnalyticsEvent, SimpleAnalyticsImportMapper } from "../../services/import/mappings/simpleAnalytics.js";
+import { UmamiEvent, UmamiImportMapper } from "../../services/import/mappers/umami.js";
+import { SimpleAnalyticsEvent, SimpleAnalyticsImportMapper } from "../../services/import/mappers/simpleAnalytics.js";
+import { PlausibleEvent, PlausibleImportMapper } from "../../services/import/mappers/plausible.js";
 import { importQuotaManager } from "../../services/import/importQuotaManager.js";
 import { db } from "../../db/postgres/postgres.js";
 import { organization, sites } from "../../db/postgres/schema.js";
 import { eq } from "drizzle-orm";
 import { getBestSubscription } from "../../lib/subscriptionUtils.js";
 import { IS_CLOUD } from "../../lib/const.js";
+import { EVENTS_INSERT_SETTINGS } from "../../services/tracker/utils.js";
 
 const batchImportRequestSchema = z
   .object({
@@ -21,6 +23,7 @@ const batchImportRequestSchema = z
       events: z.union([
         z.array(UmamiImportMapper.umamiEventKeyOnlySchema),
         z.array(SimpleAnalyticsImportMapper.simpleAnalyticsEventKeyOnlySchema),
+        z.array(PlausibleImportMapper.plausibleEventKeyOnlySchema),
       ]),
       isLastBatch: z.boolean().optional(),
     }),
@@ -87,13 +90,15 @@ export async function batchImportEvents(request: FastifyRequest<BatchImportReque
         transformedEvents = UmamiImportMapper.transform(events as UmamiEvent[], siteId, importId);
       } else if (importRecord.platform === "simple_analytics") {
         transformedEvents = SimpleAnalyticsImportMapper.transform(events as SimpleAnalyticsEvent[], siteId, importId);
+      } else if (importRecord.platform === "plausible") {
+        transformedEvents = PlausibleImportMapper.transform(events as PlausibleEvent[], siteId, importId);
       } else {
         return reply.status(400).send({ error: "Unsupported platform" });
       }
       const invalidEventCount = events.length - transformedEvents.length;
 
       const timestamps = transformedEvents.map(e => e.timestamp);
-      const allowedIndices = quotaTracker.canImportBatch(timestamps);
+      const allowedIndices = await quotaTracker.reserveBatch(timestamps);
 
       const eventsWithinQuota = allowedIndices.map(i => transformedEvents[i]);
       const skippedDueToQuota = transformedEvents.length - eventsWithinQuota.length;
@@ -103,6 +108,11 @@ export async function batchImportEvents(request: FastifyRequest<BatchImportReque
           table: "events",
           values: eventsWithinQuota,
           format: "JSONEachRow",
+          // Merge conflicting JSON paths, but don't let ClickHouse skip rows here:
+          // the counts below assume every submitted row was stored.
+          clickhouse_settings: {
+            type_json_skip_duplicated_paths: EVENTS_INSERT_SETTINGS.type_json_skip_duplicated_paths,
+          },
         });
       }
 
@@ -110,17 +120,17 @@ export async function batchImportEvents(request: FastifyRequest<BatchImportReque
 
       if (isLastBatch) {
         await completeImport(importId);
-        importQuotaManager.completeImport(siteRecord.organizationId);
+        await importQuotaManager.completeImport(siteRecord.organizationId, importId);
       }
 
       return reply.send();
     } catch (insertError) {
       const errorMessage = insertError instanceof Error ? insertError.message : "Unknown error";
-      console.error("Failed to insert events:", errorMessage);
+      request.log.error({ err: insertError }, "Failed to insert imported events");
 
       if (isLastBatch) {
         await completeImport(importId);
-        importQuotaManager.completeImport(siteRecord.organizationId);
+        await importQuotaManager.completeImport(siteRecord.organizationId, importId);
       }
 
       return reply.status(500).send({
@@ -128,7 +138,7 @@ export async function batchImportEvents(request: FastifyRequest<BatchImportReque
       });
     }
   } catch (error) {
-    console.error("Error importing events", error);
+    request.log.error({ err: error }, "Error importing events");
     return reply.status(500).send({ error: "Internal server error" });
   }
 }

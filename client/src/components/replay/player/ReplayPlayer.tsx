@@ -1,6 +1,7 @@
 import { useParams } from "next/navigation";
-import { useEffect } from "react";
+import { useCallback } from "react";
 import "rrweb-player/dist/style.css";
+import { useShallow } from "zustand/react/shallow";
 import { useGetSessionReplayEvents } from "@/api/analytics/hooks/sessionReplay/useGetSessionReplayEvents";
 import { ThreeDotLoader } from "@/components/Loaders";
 import { useReplayStore } from "../replayStore";
@@ -14,29 +15,29 @@ import { ReplayPlayerTopbar } from "./ReplayPlayerTopbar";
 export function ReplayPlayer({ width, height, isDrawer }: { width: number; height: number; isDrawer?: boolean }) {
   const params = useParams();
   const siteId = Number(params.site);
-  const {
-    sessionId,
-    player,
-    isPlaying,
-    setIsPlaying,
-    currentTime,
-    setCurrentTime,
-    duration,
-    setPlaybackSpeed,
-    resetPlayerState,
-  } = useReplayStore();
+  const { sessionId, player, isPlaying, setIsPlaying, currentTime, setCurrentTime, duration, setPlaybackSpeed } =
+    useReplayStore(
+      useShallow(s => ({
+        sessionId: s.sessionId,
+        player: s.player,
+        isPlaying: s.isPlaying,
+        setIsPlaying: s.setIsPlaying,
+        currentTime: s.currentTime,
+        setCurrentTime: s.setCurrentTime,
+        duration: s.duration,
+        setPlaybackSpeed: s.setPlaybackSpeed,
+      }))
+    );
 
+  // Playback state is reset by the player itself when it is created for a new
+  // session (see registerPlayer). A reset here would run after the child's
+  // effect and null out a player built from cached events.
   const { data, isLoading, error } = useGetSessionReplayEvents(siteId, sessionId);
-
-  // Reset player state when session changes
-  useEffect(() => {
-    resetPlayerState();
-  }, [sessionId, resetPlayerState]);
 
   // Calculate activity periods when player and data are ready
   useActivityPeriods({ data, player });
 
-  const handlePlayPause = () => {
+  const handlePlayPause = useCallback(() => {
     if (!player) return;
 
     const newPlayingState = !isPlaying;
@@ -47,37 +48,43 @@ export function ReplayPlayer({ width, height, isDrawer }: { width: number; heigh
       player.play();
     }
     setIsPlaying(newPlayingState);
-  };
+  }, [player, isPlaying, setIsPlaying]);
 
-  const handleSkipBack = () => {
+  const handleSkipBack = useCallback(() => {
     if (!player) return;
     const newTime = Math.max(0, currentTime - SKIP_SECONDS);
     player.goto(newTime);
-  };
+  }, [player, currentTime]);
 
-  const handleSkipForward = () => {
+  const handleSkipForward = useCallback(() => {
     if (!player) return;
     const newTime = Math.min(duration, currentTime + SKIP_SECONDS);
     player.goto(newTime);
-  };
+  }, [player, duration, currentTime]);
 
-  const handleSliderChange = (value: number[]) => {
-    if (!player || !duration) return;
+  const handleSliderChange = useCallback(
+    (value: number[]) => {
+      if (!player || !duration) return;
 
-    // Pause the player when user scrubs manually
-    player.pause();
-    setIsPlaying(false);
+      // Pause the player when user scrubs manually
+      player.pause();
+      setIsPlaying(false);
 
-    const newTime = (value[0] / 100) * duration;
-    player.goto(newTime);
-    setCurrentTime(newTime);
-  };
+      const newTime = (value[0] / 100) * duration;
+      player.goto(newTime);
+      setCurrentTime(newTime);
+    },
+    [player, duration, setIsPlaying, setCurrentTime]
+  );
 
-  const handleSpeedChange = (speed: string) => {
-    if (!player) return;
-    setPlaybackSpeed(speed);
-    player.setSpeed(parseFloat(speed));
-  };
+  const handleSpeedChange = useCallback(
+    (speed: string) => {
+      if (!player) return;
+      setPlaybackSpeed(speed);
+      player.setSpeed(parseFloat(speed));
+    },
+    [player, setPlaybackSpeed]
+  );
 
   // Add keyboard shortcuts
   useReplayKeyboardShortcuts({

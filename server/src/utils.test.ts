@@ -1,5 +1,43 @@
 import { describe, it, expect } from "vitest";
-import { normalizeOrigin } from "./utils.js";
+import { FastifyRequest } from "fastify";
+import { UAParser } from "ua-parser-js";
+import { getDeviceType, getIpAddress, normalizeOrigin } from "./utils.js";
+
+function requestWithHeaders(headers: Record<string, string | string[]>, ip = "198.51.100.10"): FastifyRequest {
+  return { headers, ip } as unknown as FastifyRequest;
+}
+
+describe("getIpAddress", () => {
+  it("uses X-Real-IP before all other headers", () => {
+    const request = requestWithHeaders({
+      "cf-connecting-ip": "198.51.100.20",
+      "x-forwarded-for": "203.0.113.10, 198.51.100.20",
+      "x-real-ip": "192.0.2.10",
+    });
+
+    expect(getIpAddress(request)).toBe("192.0.2.10");
+  });
+
+  it("uses the first X-Forwarded-For IP before Cloudflare's connecting IP", () => {
+    // The proxied case: a first-party proxy (e.g. CloudFront) forwards the visitor
+    // in X-Forwarded-For, while CF-Connecting-IP is our Cloudflare edge seeing the
+    // proxy's egress node. The visitor must win.
+    const request = requestWithHeaders({
+      "cf-connecting-ip": "198.51.100.20",
+      "x-forwarded-for": "203.0.113.10, 198.51.100.20",
+    });
+
+    expect(getIpAddress(request)).toBe("203.0.113.10");
+  });
+
+  it("falls back to Cloudflare's connecting IP when no forwarded headers are present", () => {
+    expect(getIpAddress(requestWithHeaders({ "cf-connecting-ip": "203.0.113.10" }))).toBe("203.0.113.10");
+  });
+
+  it("falls back to the request IP", () => {
+    expect(getIpAddress(requestWithHeaders({}))).toBe("198.51.100.10");
+  });
+});
 
 describe("normalizeOrigin", () => {
   describe("Basic subdomain removal", () => {
@@ -183,5 +221,51 @@ describe("normalizeOrigin", () => {
 
       expect(results).toEqual(["example.com", "example.com", "example.co.uk", "example.org", "example.net"]);
     });
+  });
+});
+
+describe("getDeviceType", () => {
+  const deviceType = (userAgent: string, width: number, height: number) =>
+    getDeviceType(width, height, UAParser(userAgent));
+
+  it("uses ua-parser's device type to tell tablets and TVs from phones", () => {
+    const androidTablet =
+      "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36";
+    const androidPhone =
+      "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Mobile Safari/537.36";
+    const iPadChrome =
+      "Mozilla/5.0 (iPad; CPU OS 18_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) CriOS/140.0.0.0 Mobile/15E148 Safari/604.1";
+    const tizenTv =
+      "Mozilla/5.0 (SMART-TV; LINUX; Tizen 8.0) AppleWebKit/537.36 (KHTML, like Gecko) 120.0.6099.5/8.0 TV Safari/537.36";
+    const quest =
+      "Mozilla/5.0 (X11; Linux x86_64; Quest 3) AppleWebKit/537.36 (KHTML, like Gecko) OculusBrowser/38.0.0.0 SamsungBrowser/4.0 Chrome/132.0.0.0 VR Safari/537.36";
+
+    expect(deviceType(androidTablet, 800, 1280)).toBe("Tablet");
+    expect(deviceType(androidPhone, 412, 915)).toBe("Mobile");
+    expect(deviceType(iPadChrome, 820, 1180)).toBe("Tablet");
+    expect(deviceType(tizenTv, 1920, 1080)).toBe("TV");
+    expect(deviceType(quest, 1680, 1760)).toBe("XR");
+  });
+
+  it("falls back to the OS when ua-parser has no device type", () => {
+    const windows =
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36";
+    expect(deviceType(windows, 1920, 1080)).toBe("Desktop");
+  });
+
+  it("falls back to screen size when neither the device nor the OS is known", () => {
+    expect(deviceType("", 1920, 1080)).toBe("Desktop");
+    expect(deviceType("", 768, 1024)).toBe("Tablet");
+    expect(deviceType("", 390, 844)).toBe("Mobile");
+    expect(deviceType("", 0, 0)).toBe("Mobile");
+  });
+});
+
+describe("ua-parser-js", () => {
+  it("reports the real iOS version behind Safari 26's frozen user agent", () => {
+    // Since iOS 26, Safari reports the OS as 18_x; ua-parser-js >= 2.0.5 corrects it
+    const ios26Safari =
+      "Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Mobile/15E148 Safari/604.1";
+    expect(UAParser(ios26Safari).os.version).toBe("26.0");
   });
 });

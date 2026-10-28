@@ -2,12 +2,13 @@
 
 import { EventCountRow } from "@/api/admin/endpoints/adminServiceEventCount";
 import { ChartTooltip } from "@/components/charts/ChartTooltip";
-import { userLocale } from "@/lib/dateTimeUtils";
+import { useDateTimeFormat } from "@/hooks/useDateTimeFormat";
 import { useNivoTheme } from "@/lib/nivo";
 import { formatter } from "@/lib/utils";
 import { ResponsiveLine } from "@nivo/line";
 import { useWindowSize } from "@uidotdev/usehooks";
 import { DateTime } from "luxon";
+import { useExtracted } from "next-intl";
 import { useState } from "react";
 
 const CHART_COLORS = [
@@ -21,6 +22,18 @@ const CHART_COLORS = [
   "#c084fc", // purple-400 (form submit)
   "#f472b6", // pink-400 (input change)
 ];
+
+/**
+ * A row's `event_date` is the wall-clock start of a day in the zone the counts
+ * were requested in. Read it as UTC so it keeps that calendar day: parsing it in
+ * the browser's zone and converting moved every day one back east of UTC. The
+ * chart's time scale and labels are UTC to match.
+ */
+export function parseUsageDay(eventDate: string): DateTime {
+  return DateTime.fromSQL(eventDate, { zone: "utc" });
+}
+
+const UTC_DAY: Intl.DateTimeFormatOptions = { month: "short", day: "numeric", timeZone: "UTC" };
 
 export interface EventUsageChartProps {
   data: EventCountRow[] | undefined;
@@ -38,18 +51,27 @@ export function EventUsageChart({
   maxTickCount = 10,
 }: EventUsageChartProps) {
   const { width } = useWindowSize();
+  const t = useExtracted();
   const nivoTheme = useNivoTheme();
+  const { locale, formatDateTime } = useDateTimeFormat();
   const [hiddenSeries, setHiddenSeries] = useState<Set<string>>(new Set());
 
   const maxTicks = Math.round((width ?? Infinity) / 200);
 
+  // No day after today is real. The admin charts count in the viewer's zone, so
+  // today is the later of the UTC and local dates.
+  const utcToday = DateTime.utc().toFormat("yyyy-MM-dd");
+  const localToday = DateTime.local().toFormat("yyyy-MM-dd");
+  const lastDay = utcToday > localToday ? utcToday : localToday;
+
   const mapEventData = (key: keyof EventCountRow) =>
     data
       ?.map((e) => {
-        const timestamp = DateTime.fromSQL(e.event_date).toUTC();
-        if (timestamp > DateTime.now()) return null;
+        const timestamp = parseUsageDay(e.event_date);
+        const day = timestamp.toFormat("yyyy-MM-dd");
+        if (day > lastDay) return null;
         return {
-          x: timestamp.toFormat("yyyy-MM-dd"),
+          x: day,
           y: e[key] as number,
           currentTime: timestamp,
         };
@@ -114,18 +136,18 @@ export function EventUsageChart({
         {isLoading ? (
           <div className="h-full flex items-center justify-center">
             <div className="text-sm text-muted-foreground">
-              Loading usage data...
+              {t("Loading usage data...")}
             </div>
           </div>
         ) : error ? (
           <div className="h-full flex items-center justify-center">
             <div className="text-sm text-muted-foreground">
-              Failed to load usage data
+              {t("Failed to load usage data")}
             </div>
           </div>
         ) : visibleSeries.length === 0 ? (
           <div className="h-full flex items-center justify-center">
-            <div className="text-sm text-muted-foreground">No data</div>
+            <div className="text-sm text-muted-foreground">{t("No data")}</div>
           </div>
         ) : (
           <ResponsiveLine
@@ -158,8 +180,7 @@ export function EventUsageChart({
               truncateTickAt: 0,
               tickValues: Math.min(maxTicks, maxTickCount),
               format: (value) => {
-                const dt = DateTime.fromJSDate(value).setLocale(userLocale);
-                return dt.toFormat("MMM d");
+                return new Intl.DateTimeFormat(locale, UTC_DAY).format(value);
               },
             }}
             axisLeft={{
@@ -190,7 +211,7 @@ export function EventUsageChart({
                 <ChartTooltip>
                   <div className="p-3 min-w-[100px]">
                     <div className="font-medium mb-1">
-                      {currentTime.toLocaleString(DateTime.DATE_MED)}
+                      {formatDateTime(currentTime, { ...UTC_DAY, year: "numeric" })}
                     </div>
                     {slice.points
                       .sort(
@@ -223,7 +244,7 @@ export function EventUsageChart({
                         </div>
                       ))}
                     <div className="mt-2 flex justify-between border-t border-neutral-100 dark:border-neutral-750 pt-2">
-                      <div>Total</div>
+                      <div>{t("Total")}</div>
                       <div className="font-semibold">
                         {total.toLocaleString()}
                       </div>
@@ -273,7 +294,7 @@ export function EventUsageChart({
           );
         })}
         <div className="flex items-center justify-between gap-3 border-t border-neutral-200 dark:border-neutral-700 pt-1.5 mt-0.5">
-          <span className="text-neutral-600 dark:text-neutral-400">Total</span>
+          <span className="text-neutral-600 dark:text-neutral-400">{t("Total")}</span>
           <span className="font-semibold tabular-nums">
             {totalEvents.toLocaleString()}
           </span>

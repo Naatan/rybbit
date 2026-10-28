@@ -1,9 +1,9 @@
 "use client";
 
 import { authClient } from "@/lib/auth";
-import { DateTime } from "luxon";
+import { useExtracted } from "next-intl";
 import { useRouter } from "next/navigation";
-import { Suspense } from "react";
+import { Suspense, useEffect } from "react";
 import { StandardPage } from "../../components/StandardPage";
 import { UsageChart } from "../../components/UsageChart";
 import { useStripeSubscription } from "../../lib/subscription/useStripeSubscription";
@@ -19,24 +19,30 @@ function SubscribeContent() {
 
   const [siteId, setSiteId] = useQueryState("siteId");
 
-  // Redirect if already subscribed
-  // if (subscription?.status === "active") {
-  //   router.push("/settings/organization/subscription");
-  // }
+  // An organization with a live Stripe subscription changes plan in Billing
+  // (PlanDialog, which updates that subscription). A checkout from here would
+  // start a second subscription, billed alongside the first.
+  const hasStripeSubscription =
+    !!subscription?.id && (subscription.status === "active" || subscription.status === "trialing");
+
+  useEffect(() => {
+    if (hasStripeSubscription) {
+      router.replace("/settings/billing");
+    }
+  }, [hasStripeSubscription, router]);
 
   // Get the active organization ID
   const organizationId = activeOrg?.id;
 
-  // Get last 30 days of data
-  const endDate = DateTime.now().toISODate();
-  const startDate = DateTime.now().minus({ days: 30 }).toISODate();
+  if (hasStripeSubscription) {
+    return null;
+  }
 
   if (siteId) {
     return (
       <StandardPage>
         <div className="container mx-auto py-12 px-4">
           <PricingHeader />
-
           {/* Pricing Card */}
           <PricingCards isLoggedIn={!!sessionData?.user} />
         </div>
@@ -48,14 +54,12 @@ function SubscribeContent() {
     <StandardPage>
       <div className="container mx-auto py-12 px-4">
         <PricingHeader />
-
         {/* Pricing Card */}
         <PricingCards isLoggedIn={!!sessionData?.user} />
-
         {/* Usage Stats and Chart */}
         {organizationId && (
           <div className="max-w-4xl mx-auto mt-6 bg-white dark:bg-neutral-900/80 rounded-xl border border-neutral-100 dark:border-neutral-850 p-6">
-            <UsageChart organizationId={organizationId} startDate={startDate} endDate={endDate} />
+            <UsageChart organizationId={organizationId} />
           </div>
         )}
       </div>
@@ -64,8 +68,9 @@ function SubscribeContent() {
 }
 
 export default function Subscribe() {
+  const t = useExtracted();
   return (
-    <Suspense fallback={<div className="flex items-center justify-center min-h-screen">Loading...</div>}>
+    <Suspense fallback={<div className="flex items-center justify-center min-h-screen">{t("Loading...")}</div>}>
       <SubscribeContent />
     </Suspense>
   );

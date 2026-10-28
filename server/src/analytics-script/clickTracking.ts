@@ -1,9 +1,15 @@
 import { ScriptConfig, ButtonClickProperties } from "./types.js";
 import { Tracker } from "./tracking.js";
 
+// Collapse rapid repeat clicks on the same element (spinners, configurator
+// toggles, double-clicks) into one event: cuts event-volume noise at the source
+// and keeps interaction bursts from reading as bot traffic server-side.
+const CLICK_THROTTLE_MS = 1000;
+
 export class ClickTrackingManager {
   private tracker: Tracker;
   private config: ScriptConfig;
+  private lastClickAt = new WeakMap<HTMLElement, number>();
 
   constructor(tracker: Tracker, config: ScriptConfig) {
     this.tracker = tracker;
@@ -52,6 +58,11 @@ export class ClickTrackingManager {
     // Skip if button has custom event tracking
     if (buttonElement.hasAttribute("data-rybbit-event")) return;
 
+    const now = Date.now();
+    const lastAt = this.lastClickAt.get(buttonElement);
+    if (lastAt !== undefined && now - lastAt < CLICK_THROTTLE_MS) return;
+    this.lastClickAt.set(buttonElement, now);
+
     const properties: ButtonClickProperties = {
       text: this.getElementText(buttonElement),
       ...this.extractDataAttributes(buttonElement),
@@ -93,7 +104,20 @@ export class ClickTrackingManager {
 
   private getElementText(element: HTMLElement): string | undefined {
     const text = element.textContent?.trim().substring(0, 100);
-    return text || undefined;
+    if (text) return text;
+
+    const ariaLabel = element.getAttribute("aria-label")?.trim().substring(0, 100);
+    if (ariaLabel) return ariaLabel;
+
+    if (element.tagName === "INPUT") {
+      const value = (element as HTMLInputElement).value?.trim().substring(0, 100);
+      if (value) return value;
+    }
+
+    const title = element.getAttribute("title")?.trim().substring(0, 100);
+    if (title) return title;
+
+    return undefined;
   }
 
   cleanup(): void {

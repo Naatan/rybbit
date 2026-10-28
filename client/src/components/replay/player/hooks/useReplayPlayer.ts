@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import rrwebPlayer from "rrweb-player";
+import { useShallow } from "zustand/react/shallow";
 import { useReplayStore } from "../../replayStore";
 import { CONTROLS_HEIGHT } from "../utils/replayUtils";
 
@@ -11,8 +12,24 @@ interface UseReplayPlayerProps {
 
 export const useReplayPlayer = ({ data, width, height }: UseReplayPlayerProps) => {
   const playerContainerRef = useRef<HTMLDivElement>(null);
-  const { setPlayer, setCurrentTime, setIsPlaying, setDuration, setActivityPeriods } = useReplayStore();
+  const playerRef = useRef<any>(null);
+  const { registerPlayer, unregisterPlayer, setCurrentTime, setIsPlaying, setDuration } = useReplayStore(
+    useShallow(s => ({
+      registerPlayer: s.registerPlayer,
+      unregisterPlayer: s.unregisterPlayer,
+      setCurrentTime: s.setCurrentTime,
+      setIsPlaying: s.setIsPlaying,
+      setDuration: s.setDuration,
+    }))
+  );
 
+  // Store width/height in refs for the resize effect
+  const widthRef = useRef(width);
+  const heightRef = useRef(height);
+  widthRef.current = width;
+  heightRef.current = height;
+
+  // Initialize player when data changes
   useEffect(() => {
     if (data?.events && playerContainerRef.current) {
       // Clear any existing content first
@@ -20,6 +37,7 @@ export const useReplayPlayer = ({ data, width, height }: UseReplayPlayerProps) =
 
       let newPlayer: any = null;
       let handleVisibilityChange: (() => void) | null = null;
+      let durationTimeout: ReturnType<typeof setTimeout> | undefined;
 
       try {
         // Initialize rrweb player
@@ -27,18 +45,24 @@ export const useReplayPlayer = ({ data, width, height }: UseReplayPlayerProps) =
           target: playerContainerRef.current,
           props: {
             events: data.events as any, // Cast to any to handle type compatibility with rrweb
-            width: width,
+            width: widthRef.current,
             // subtract for the custom controls
-            height: height - CONTROLS_HEIGHT,
+            height: heightRef.current - CONTROLS_HEIGHT,
             autoPlay: false,
             showController: false, // We'll use custom controls
           },
         });
 
-        setPlayer(newPlayer);
+        playerRef.current = newPlayer;
+        registerPlayer(newPlayer);
+
+        // Another mounted player (e.g. the maximize drawer's) may own the
+        // shared controls; only the active one writes playback state.
+        const isActive = () => useReplayStore.getState().player === newPlayer;
 
         // Set up event listeners
         newPlayer.addEventListener("ui-update-current-time", (event: any) => {
+          if (!isActive()) return;
           // Validate that current time doesn't exceed duration
           const currentTime = event.payload;
           const playerDuration = newPlayer.getMetaData().totalTime;
@@ -54,17 +78,19 @@ export const useReplayPlayer = ({ data, width, height }: UseReplayPlayerProps) =
         });
 
         newPlayer.addEventListener("ui-update-player-state", (event: any) => {
+          if (!isActive()) return;
           setIsPlaying(event.payload === "playing");
         });
 
         newPlayer.addEventListener("ui-update-duration", (event: any) => {
+          if (!isActive()) return;
           setDuration(event.payload);
         });
 
         // Get the initial duration from the player
-        setTimeout(() => {
+        durationTimeout = setTimeout(() => {
           const playerDuration = newPlayer.getMetaData().totalTime;
-          if (playerDuration) {
+          if (playerDuration && isActive()) {
             setDuration(playerDuration);
           }
         }, 100);
@@ -107,20 +133,41 @@ export const useReplayPlayer = ({ data, width, height }: UseReplayPlayerProps) =
       }
 
       return () => {
-        // Proper cleanup
+        // A destroyed player has no methods left for the duration read to call.
+        clearTimeout(durationTimeout);
+        if (handleVisibilityChange) {
+          document.removeEventListener("visibilitychange", handleVisibilityChange);
+        }
+        playerRef.current = null;
+        unregisterPlayer(newPlayer);
+        // rrweb-player's fullscreen listeners on document hold the component,
+        // its Replayer and the whole recording until $destroy removes them, so
+        // emptying the container alone leaks every replay that was opened.
         if (newPlayer) {
-          newPlayer.pause();
+          try {
+            newPlayer.getReplayer().destroy();
+          } catch (error) {
+            console.error("Failed to destroy rrweb replayer:", error);
+          }
+          newPlayer.$destroy();
         }
         if (playerContainerRef.current) {
           playerContainerRef.current.innerHTML = "";
         }
-        if (handleVisibilityChange) {
-          document.removeEventListener("visibilitychange", handleVisibilityChange);
-        }
-        setPlayer(null);
       };
     }
-  }, [data, width, height, setPlayer, setCurrentTime, setIsPlaying, setDuration, setActivityPeriods]);
+  }, [data, registerPlayer, unregisterPlayer, setCurrentTime, setIsPlaying, setDuration]);
+
+  // Update dimensions without recreating the player
+  useEffect(() => {
+    if (playerRef.current) {
+      playerRef.current.$set({
+        width,
+        height: height - CONTROLS_HEIGHT,
+      });
+      playerRef.current.triggerResize();
+    }
+  }, [width, height]);
 
   return { playerContainerRef };
 };

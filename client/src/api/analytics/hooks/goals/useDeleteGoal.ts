@@ -1,6 +1,7 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useStore } from "../../../../lib/store";
 import { deleteGoal } from "../../endpoints";
+import { invalidateGoalDependents } from "./invalidateGoalDependents";
 
 export function useDeleteGoal() {
   const queryClient = useQueryClient();
@@ -15,6 +16,13 @@ export function useDeleteGoal() {
       queryClient.invalidateQueries({
         queryKey: ["goals", site],
       });
+      queryClient.invalidateQueries({
+        queryKey: ["goals-summary", site],
+      });
+      queryClient.invalidateQueries({
+        queryKey: ["goal-time-series", site],
+      });
+      invalidateGoalDependents(queryClient);
     },
   });
 }

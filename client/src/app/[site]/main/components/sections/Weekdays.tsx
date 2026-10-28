@@ -1,7 +1,9 @@
 import { DateTime } from "luxon";
+import { useExtracted } from "next-intl";
 import { useMemo, useState } from "react";
 import { useGetOverviewBucketed } from "../../../../../api/analytics/hooks/useGetOverviewBucketed";
 import { ChartTooltip } from "../../../../../components/charts/ChartTooltip";
+import { ErrorState } from "../../../../../components/ErrorState";
 import { Tabs, TabsList, TabsTrigger } from "../../../../../components/ui/basic-tabs";
 import { Card, CardContent, CardLoader } from "../../../../../components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../../../../components/ui/select";
@@ -15,15 +17,16 @@ export function Weekdays() {
   const { site, time } = useStore();
   const [metric, setMetric] = useState<StatType>("users");
   const timezone = getTimezone();
+  const t = useExtracted();
 
-  const { data, isFetching, error } = useGetOverviewBucketed({
+  const { data, isFetching, error, refetch } = useGetOverviewBucketed({
     site,
     bucket: "hour",
   });
 
   // Generate aggregated data for the heatmap
   const heatmapData = useMemo(() => {
-    if (!data?.data) return [];
+    if (!data) return [];
 
     // Initialize a 2D array for days (0-6) and hours (0-23)
     const aggregated: number[][] = Array(7)
@@ -36,7 +39,7 @@ export function Weekdays() {
       .map(() => Array(24).fill(0));
 
     // Process each data point
-    data.data.forEach(item => {
+    data.forEach(item => {
       if (!item || !item.time) return;
 
       // Parse the timestamp in the selected timezone
@@ -124,17 +127,17 @@ export function Weekdays() {
   const getMetricDisplayName = (metric: StatType): string => {
     switch (metric) {
       case "users":
-        return "Unique Visitors";
+        return t("Unique Visitors");
       case "pageviews":
-        return "Pageviews";
+        return t("Pageviews");
       case "sessions":
-        return "Sessions";
+        return t("Sessions");
       case "bounce_rate":
-        return "Bounce Rate";
+        return t("Bounce Rate");
       case "pages_per_session":
-        return "Pages per Session";
+        return t("Pages per Session");
       case "session_duration":
-        return "Session Duration";
+        return t("Session Duration");
       default:
         return metric;
     }
@@ -147,100 +150,104 @@ export function Weekdays() {
         <div className="flex flex-row items-center justify-between">
           <Tabs defaultValue="pages" value={"pages"}>
             <TabsList>
-              <TabsTrigger value="pages">Weekly Trends</TabsTrigger>
+              <TabsTrigger value="pages">{t("Weekly Trends")}</TabsTrigger>
             </TabsList>
           </Tabs>
 
           <Select value={metric} onValueChange={value => setMetric(value as StatType)}>
             <SelectTrigger className="w-[160px]" size="sm">
-              <SelectValue placeholder="Select metric" />
+              <SelectValue placeholder={t("Select metric")} />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="users">Unique Visitors</SelectItem>
-              <SelectItem value="pageviews">Pageviews</SelectItem>
-              <SelectItem value="sessions">Sessions</SelectItem>
-              <SelectItem value="bounce_rate">Bounce Rate</SelectItem>
-              <SelectItem value="pages_per_session">Pages per Session</SelectItem>
-              <SelectItem value="session_duration">Session Duration</SelectItem>
+              <SelectItem value="users">{t("Unique Visitors")}</SelectItem>
+              <SelectItem value="pageviews">{t("Pageviews")}</SelectItem>
+              <SelectItem value="sessions">{t("Sessions")}</SelectItem>
+              <SelectItem value="bounce_rate">{t("Bounce Rate")}</SelectItem>
+              <SelectItem value="pages_per_session">{t("Pages per Session")}</SelectItem>
+              <SelectItem value="session_duration">{t("Session Duration")}</SelectItem>
             </SelectContent>
           </Select>
         </div>
-        <div className="flex mt-1 p-2">
-          <div className="w-12">
-            {/* Empty top-left cell */}
-            <div className="h-5"></div>
+        {error && !data ? (
+          <ErrorState title="" message="" refetch={refetch} />
+        ) : (
+          <div className="flex mt-1 p-2">
+            <div className="w-12">
+              {/* Empty top-left cell */}
+              <div className="h-5"></div>
 
-            {/* Time labels - only display every other hour */}
-            {Array(24)
-              .fill(0)
-              .map((_, hour) => (
-                <div
-                  key={hour}
-                  className="h-4 text-xs flex items-center justify-end pr-2 text-neutral-600 dark:text-neutral-400"
-                >
-                  {hour % 2 === 1 ? hourLabels[hour] : ""}
-                </div>
-              ))}
-          </div>
-
-          <div className="flex-1">
-            {/* Day labels */}
-            <div className="flex h-5">
-              {shortDayNames.map((day, i) => (
-                <div key={i} className="flex-1 text-center text-xs text-neutral-600 dark:text-neutral-400">
-                  {day}
-                </div>
-              ))}
+              {/* Time labels - only display every other hour */}
+              {Array(24)
+                .fill(0)
+                .map((_, hour) => (
+                  <div
+                    key={hour}
+                    className="h-4 text-xs flex items-center justify-end pr-2 text-neutral-600 dark:text-neutral-400"
+                  >
+                    {hour % 2 === 1 ? hourLabels[hour] : ""}
+                  </div>
+                ))}
             </div>
 
-            {/* Heatmap grid */}
-            {Array(24)
-              .fill(0)
-              .map((_, hour) => (
-                <div key={hour} className="flex h-4">
-                  {Array(7)
-                    .fill(0)
-                    .map((_, day) => {
-                      const value =
-                        heatmapData &&
-                        heatmapData.length > day &&
-                        Array.isArray(heatmapData[day]) &&
-                        heatmapData[day].length > hour
-                          ? heatmapData[day][hour]
-                          : 0;
-                      const colorClass = value > 0 ? getColorIntensity(value) : "bg-neutral-50 dark:bg-neutral-850";
-                      return (
-                        <Tooltip key={day}>
-                          <TooltipTrigger asChild>
-                            <div
-                              className={cn(
-                                "flex-1 mx-0.5 hover:ring-1 hover:ring-emerald-300 transition-all rounded-sm my-0.5",
-                                colorClass
-                              )}
-                            />
-                          </TooltipTrigger>
-                          <TooltipContent className="p-0 border-0 bg-transparent">
-                            <ChartTooltip>
-                              <div className="flex flex-col gap-1 p-2">
-                                <div className="font-medium text-sm">
-                                  {longDayNames[day]} {formatLocalTime(hour, 0)} - {formatLocalTime(hour, 59)}
+            <div className="flex-1">
+              {/* Day labels */}
+              <div className="flex h-5">
+                {shortDayNames.map((day, i) => (
+                  <div key={i} className="flex-1 text-center text-xs text-neutral-600 dark:text-neutral-400">
+                    {day}
+                  </div>
+                ))}
+              </div>
+
+              {/* Heatmap grid */}
+              {Array(24)
+                .fill(0)
+                .map((_, hour) => (
+                  <div key={hour} className="flex h-4">
+                    {Array(7)
+                      .fill(0)
+                      .map((_, day) => {
+                        const value =
+                          heatmapData &&
+                          heatmapData.length > day &&
+                          Array.isArray(heatmapData[day]) &&
+                          heatmapData[day].length > hour
+                            ? heatmapData[day][hour]
+                            : 0;
+                        const colorClass = value > 0 ? getColorIntensity(value) : "bg-neutral-50 dark:bg-neutral-850";
+                        return (
+                          <Tooltip key={day}>
+                            <TooltipTrigger asChild>
+                              <div
+                                className={cn(
+                                  "flex-1 mx-0.5 hover:ring-1 hover:ring-emerald-300 transition-all rounded-sm my-0.5",
+                                  colorClass
+                                )}
+                              />
+                            </TooltipTrigger>
+                            <TooltipContent className="p-0 border-0 bg-transparent">
+                              <ChartTooltip>
+                                <div className="flex flex-col gap-1 p-2">
+                                  <div className="font-medium text-sm">
+                                    {longDayNames[day]} {formatLocalTime(hour, 0)} - {formatLocalTime(hour, 59)}
+                                  </div>
+                                  <div className="flex items-center gap-2">
+                                    <span className="font-semibold">{formatMetricValue(value)}</span>
+                                    <span className="text-neutral-500 dark:text-neutral-400 text-xs">
+                                      {getMetricDisplayName(metric)}
+                                    </span>
+                                  </div>
                                 </div>
-                                <div className="flex items-center gap-2">
-                                  <span className="font-semibold">{formatMetricValue(value)}</span>
-                                  <span className="text-neutral-500 dark:text-neutral-400 text-xs">
-                                    {getMetricDisplayName(metric)}
-                                  </span>
-                                </div>
-                              </div>
-                            </ChartTooltip>
-                          </TooltipContent>
-                        </Tooltip>
-                      );
-                    })}
-                </div>
-              ))}
+                              </ChartTooltip>
+                            </TooltipContent>
+                          </Tooltip>
+                        );
+                      })}
+                  </div>
+                ))}
+            </div>
           </div>
-        </div>
+        )}
       </CardContent>
     </Card>
   );

@@ -1,10 +1,14 @@
 <p align="center">
-  <img src="https://github.com/user-attachments/assets/be982e50-8d59-471c-9fb7-e8982658a608" height="100">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/public/rybbit/horizontal_white.svg">
+    <source media="(prefers-color-scheme: light)" srcset="docs/public/rybbit/horizontal_black.svg">
+    <img src="docs/public/rybbit/horizontal_black.svg" height="70" alt="Rybbit">
+  </picture>
     <p align="center">Open Source Web & Product Analytics</p>
 
 <p align="center">
     <a href="https://rybbit.com" target="_blank">Website</a> |
-    <a href="https://demo.rybbit.com/1" target="_blank">Demo</a> |
+    <a href="https://demo.rybbit.com/81" target="_blank">Demo</a> |
     <a href="https://rybbit.com/docs" target="_blank">Documentation</a> |
     <a href="https://discord.gg/DEhGb4hYBj" target="_blank">Discord</a> |
     <a href="https://github.com/rybbit-io/rybbit?tab=AGPL-3.0-1-ov-file" target="_blank">License (AGPL-3)</a> |
@@ -33,10 +37,12 @@ There are two ways to start using Rybbit:
 
 | Option                                                   | Description                                                   |
 | -------------------------------------------------------- | ------------------------------------------------------------- |
-| **[Hosted Service](https://rybbit.com)**                 | Free tier available - the fastest way to get started          |
+| **[Hosted Service](https://rybbit.com)**                 | The fastest way to get started                                |
 | **[Self-Hosting](https://rybbit.com/docs/self-hosting)** | Deploy and manage Rybbit on your own VPS for complete control |
 
 📚 Explore our [documentation](https://rybbit.com/docs) to learn more about installation, configuration, and usage.
+
+To work on the client and backend locally, see the [pnpm workspace setup](CONTRIBUTE.md#local-development).
 
 <hr>
 
@@ -78,7 +84,6 @@ See how Rybbit compares to other analytics solutions:
 | **Error Tracking**                | ✅     | ❌         | ❌         | ❌         |
 | **Public Dashboards**             | ✅     | ❌         | ✅         | ❌         |
 | **Organizations**                 | ✅     | ✅         | ✅         | ✅         |
-| **Free Tier**                     | ✅     | ✅         | ❌         | ✅         |
 | **Frog 🐸**                       | ✅     | ❌         | ❌         | ❌         |
 
 \* Plausible's Community Edition has very limited features compared to their cloud version
@@ -132,4 +137,4 @@ See how Rybbit compares to other analytics solutions:
 
 ## ⭐ Star History
 
-[![Star History Chart](https://api.star-history.com/svg?repos=rybbit-io/rybbit&type=Date)](https://www.star-history.com/#rybbit-io/rybbit&Date)
+[![Star History Chart](https://star-history.dera.page/svg?repos=rybbit-io/rybbit&type=Date)](https://star-history.dera.page/#rybbit-io/rybbit&Date)

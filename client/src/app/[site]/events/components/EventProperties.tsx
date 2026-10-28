@@ -1,5 +1,6 @@
 "use client";
 
+import { useExtracted } from "next-intl";
 import NumberFlow from "@number-flow/react";
 import { Info } from "lucide-react";
 import { memo } from "react";
@@ -15,6 +16,7 @@ interface EventPropertiesProps {
 }
 
 export function EventProperties({ properties, isLoading, selectedEvent, size = "small" }: EventPropertiesProps) {
+  const t = useExtracted();
   if (isLoading) {
     return <EventPropertiesSkeleton size={size} />;
   }
@@ -23,7 +25,7 @@ export function EventProperties({ properties, isLoading, selectedEvent, size = "
     return (
       <div className="text-neutral-600 dark:text-neutral-300 w-full text-center py-8 flex flex-col gap-2 items-center justify-center">
         <Info className="w-6 h-6" />
-        <p>Select an event to view its properties</p>
+        <p>{t("Select an event to view its properties")}</p>
       </div>
     );
   }
@@ -32,7 +34,7 @@ export function EventProperties({ properties, isLoading, selectedEvent, size = "
     return (
       <div className="text-neutral-600 dark:text-neutral-300 w-full text-center py-8 flex flex-col gap-2 items-center justify-center">
         <Info className="w-6 h-6" />
-        <p>No properties found for this event</p>
+        <p>{t("No properties found for this event")}</p>
       </div>
     );
   }
@@ -104,11 +106,7 @@ export function EventProperties({ properties, isLoading, selectedEvent, size = "
                         <div className="hidden group-hover:block text-neutral-500 dark:text-neutral-400">
                           {Math.round(percentage * 10) / 10}%
                         </div>
-                        <NumberFlow
-                          respectMotionPreference={false}
-                          value={property.count}
-                          format={{ notation: "compact" }}
-                        />
+                        <NumberFlow value={property.count} format={{ notation: "compact" }} />
                       </div>
                     </div>
                   </div>
